@@ -1,6 +1,6 @@
 {
     "name": "tokenly/copay-client",
-    "description": "An API service provider for Laravel",
+    "description": "A Copay protocol client",
     "type": "library",
     "license": "AGPLv3",
     "authors": [
