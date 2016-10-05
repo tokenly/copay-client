@@ -79,6 +79,18 @@ class CopayClient
         return $result;
     }
 
+    /*
+    * returns:
+    * {
+    *   "address": "39VbaiHFKTzwCvjFJczdjVQX11cVgu29g1",
+    *   "walletId": "72abff08-6414-4d91-adfc-509cbc26e53f"
+    * }
+    */
+    public function getAddressInfo($copayer_id, $request_private_key) {
+        $result = $this->post('/v3/addresses/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
 
 
     public function get($url, $parameters=[], $options=[]) {
