@@ -48,7 +48,6 @@ class CopayClient
         $args['name'] = $encrypted_wallet_name;
 
         $result = $this->post('/v2/wallets/', $args);
-        echo "\$result: ".json_encode($result, 192)."\n";
 
         return $result['walletId'];
     }
@@ -141,7 +140,6 @@ class CopayClient
         if (substr($api_path, 0, 8) == '/bws/api') { $api_path = substr($api_path, 8); }
 
         $message = strtolower($method).'|'.$api_path.'|'.json_encode($parameters, JSON_UNESCAPED_SLASHES | JSON_FORCE_OBJECT);
-        echo "signRequest \$message: ".json_encode($message, 192)."\n";
         return $this->signMessage($message, $wallet_priv_key);
     }
 
@@ -236,7 +234,6 @@ class CopayClient
         $copay_status_code = null;
         $error_message = null;
         $error_code = 1;
-        // echo "\$json: ".json_encode($json, 192)."\n";
         if ($json) {
             // check for error
             if (isset($json['code'])) {
