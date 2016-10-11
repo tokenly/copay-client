@@ -14,6 +14,9 @@ $platform_seed = getenv('PLATFORM_WALLET_SEED'); if ($platform_seed === false) {
 $wallet_name = $argv[1];
 if (!$wallet_name) { throw new Exception("wallet_name is required", 1); }
 
+$copayer_name = $argv[2];
+if (!$copayer_name) { throw new Exception("copayer_name is required", 1); }
+
 
 $random = new Random();
 $wallet_seed = $random->bytes(16)->getHex();
@@ -35,7 +38,7 @@ $copay_client = new CopayClient('https://pockets-service.tokenly.com/bws/api');
 $copay_client->withSharedEncryptionService($shared_encryption_service);
 
 try {
-    $result = $copay_client->createWallet($wallet, $wallet_name, $create_wallet_args);
+    $result = $copay_client->createAndJoinWallet($wallet, $wallet_name, $copayer_name, $create_wallet_args);
 } catch (CopayException $e) {
     echo "Error ".$e->getCode().": ".$e->getMessage()." (".$e->getCopayStatusCode().")\n";
     exit(1);

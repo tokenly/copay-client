@@ -24,7 +24,7 @@ $copay_client->withSharedEncryptionService($shared_encryption_service);
 $copay_client->withPersonalEncryptionService($personal_encryption_service);
 
 try {
-    $result = $copay_client->getWallet($wallet['copayerId'], $wallet['requestPrivKey']);
+    $result = $copay_client->getWallet($wallet);
 } catch (CopayException $e) {
     echo "Error ".$e->getCode().": ".$e->getMessage()." (".$e->getCopayStatusCode().")\n";
     exit(1);

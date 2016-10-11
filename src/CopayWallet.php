@@ -140,7 +140,8 @@ class CopayWallet implements ArrayAccess
     }
 
     protected function buildCredential_xPubKey() {
-        return $this['address_priv_hd_key']->toPublic();
+        $pub = clone $this['address_priv_hd_key'];
+        return $pub->toPublic();
     }
 
     protected function buildCredential_requestPrivKey() {

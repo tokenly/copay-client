@@ -5,23 +5,35 @@ namespace Tokenly\CopayClient;
 use BitWasp\Bitcoin\Bitcoin;
 use BitWasp\Bitcoin\Crypto\Hash;
 use BitWasp\Bitcoin\Crypto\Random\Rfc6979;
-use BitWasp\Bitcoin\MessageSigner\SignedMessage;
+use BitWasp\Bitcoin\Script\ScriptFactory;
 use BitWasp\Buffertools\Buffer;
 use Exception;
 use Requests;
 use Tokenly\CopayClient\CopayException;
+use Tokenly\CopayClient\CopayWallet;
 use Tokenly\CopayClient\EncryptionService\EncryptionServiceClient;
+use Tokenly\CopayClient\Transaction\CopayTransactionBuilder;
+use Tokenly\CounterpartyTransactionComposer\OpReturnBuilder;
+use Tokenly\CryptoQuantity\CryptoQuantity;
 
 /*
 * CopayClient
+*
+* Use createAndJoinWallet for a new wallet
+* Use proposePublishAndSignTransaction to submit a transaction
 */
 class CopayClient
 {
 
+    // a trial OP_RETURN for calculating fees
+    const SATOSHI               = 100000000;
+    const CP_DUST_SIZE          = 5430;
+    const OP_RETURN_PLACEHOLDER = '6a3800000000000000000000000000000000000000000000000000000000';
+
     protected $api_base_url = '';
 
     function __construct($api_base_url) {
-        $this->api_base_url       = rtrim($api_base_url, '/');;
+        $this->api_base_url = rtrim($api_base_url, '/');;
     }
 
     public function withSharedEncryptionService(EncryptionServiceClient $shared_encryption_service) {
@@ -35,16 +47,104 @@ class CopayClient
     }
 
 
+    /**
+     * Initiates a new shared wallet
+     * Requires shared and personal encryption services
+     * @param  CopayWallet $wallet       The seeded wallet
+     * @param  string      $wallet_name  Wallet name displayed in Pockets
+     * @param  string      $copayer_name Copayer name displayed in Pockets
+     * @param  array       $args         arguments such as 'm' and 'n'
+     * @return array                     new wallet info
+     */
+    public function createAndJoinWallet(CopayWallet $wallet, $wallet_name, $copayer_name, $args) {
+        $wallet_id = $this->createWallet($wallet, $wallet_name, $args);
+        return $this->joinWallet($wallet, $wallet_id, $copayer_name);
+    }
+
+
+
+    /**
+     * Publishes and signs a transaction
+     * 
+     * args are:
+     *   address: destination bitcoin address
+     *   amountSat: The amount to send in Satoshis (for indivisible assets, this is the amount of tokens to send)
+     *   feePerKB: fee per KB
+     *   token: the token to send (optional - default: BTC)
+     *   divisible: set to false for indivisible tokens (optional - default: true)
+     *   message: the transaction message (optional)
+     * 
+     * @param  CopayWallet $wallet       The seeded wallet
+     * @param  array       $args         arguments: address, amountSat, feePerKB, [token=BTC], message
+     * @return array                     The transaction info
+     */
+    public function proposePublishAndSignTransaction(CopayWallet $wallet, $args) {
+        $transaction_proposal = $this->proposeTransaction($wallet, $args);
+        $transaction_proposal = $this->publishTransactionProposal($wallet, $transaction_proposal);
+        return $this->signTransactionProposal($wallet, $transaction_proposal);
+    }
+
+
+    /**
+     * Publishes and signs a transaction
+     * @param  CopayWallet $wallet The seeded wallet
+     * @return array               The address info
+     * {
+     *   "address": "39VbaiHFKTzwCvjFJczdjVQX11cVgu29g1",
+     *   "walletId": "72abff08-6414-4d91-adfc-509cbc26e53f"
+     * }
+     */
+    public function getAddressInfo(CopayWallet $wallet) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+
+        $result = $this->post('/v3/addresses/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
+
+    /**
+     * Get wallet info
+     * @param  CopayWallet $wallet The seeded wallet
+     * @return array               wallet information
+     * {
+     *    "wallet": {
+     *        "id": "72abff08-6414-4d91-adfc-509cbc26e53f",
+     *        "name": "{\"iv\":\"rd4soA+NYsc3ah+4mj/HKw==\",\"v\":1,\"iter\":1,\"ks\":128,\"ts\":64,\"mode\":\"ccm\",\"adata\":\"\",\"cipher\":\"aes\",\"ct\":\"SbhHwk3+IBDouT8lHkXnTf+kUyd5rw==\"}",
+     *        "m": 2,
+     *        "n": 2,
+     *        "singleAddress": true,
+     *        "status": "complete",
+     *        "copayers": [
+     *            ...
+     *        ]
+     *        ...
+     *    }
+     *  }
+     */
+    public function getWallet(CopayWallet $wallet) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+        $result = $this->get('/v2/wallets/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
+
+
     // returns the wallet id
-    public function createWallet($wallet_name, $args) {
+    public function createWallet(CopayWallet $wallet, $wallet_name, $args) {
         $args = array_merge([
             'm'             => 2,
             'n'             => 2,
             'network'       => 'livenet',
             'singleAddress' => true,
+            'pubKey'        => $wallet['walletPubKey']->getHex(),
         ], $args);
 
-        $encrypted_wallet_name = $this->shared_encryption_service->encrypt($wallet_name);
+        $args['m'] = intval($args['m']);
+        $args['n'] = intval($args['n']);
+
+        $encrypted_wallet_name = $this->requireSharedEncryptionService()->encrypt($wallet_name);
         $args['name'] = $encrypted_wallet_name;
 
         $result = $this->post('/v2/wallets/', $args);
@@ -52,10 +152,14 @@ class CopayClient
         return $result['walletId'];
     }
 
-    public function joinWallet($wallet_id, $wallet_priv_key, $wallet_address_public_key, $request_public_key, $copayer_name) {
+    public function joinWallet(CopayWallet $wallet, $wallet_id, $copayer_name) {
+        $wallet_priv_key           = $wallet['walletPrivKey'];
+        $wallet_address_public_key = $wallet['xPubKey'];
+        $request_public_key        = $wallet['requestPubKey'];
+
         $custom_data = ['walletPrivKey' => $wallet_priv_key->getHex()];
-        $encoded_custom_data = $this->personal_encryption_service->encrypt(json_encode($custom_data));
-        $encoded_copayer_name = $this->shared_encryption_service->encrypt($copayer_name);
+        $encoded_custom_data = $this->requirePersonalEncryptionService()->encrypt(json_encode($custom_data));
+        $encoded_copayer_name = $this->requireSharedEncryptionService()->encrypt($copayer_name);
 
         $args = [
             'walletId'      => $wallet_id,
@@ -73,24 +177,91 @@ class CopayClient
         return $result;
     }
 
-    public function getWallet($copayer_id, $request_private_key) {
-        $result = $this->get('/v2/wallets/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+
+    public function proposeTransaction(CopayWallet $wallet, $args) {
+        if (!isset($args['address']) OR !$args['address']) { throw new Exception("address is required", 1); }
+        if (!isset($args['amountSat']) OR !$args['amountSat']) { throw new Exception("amountSat is required", 1); }
+        if (!isset($args['feePerKBSat']) OR !$args['feePerKBSat']) { throw new Exception("feePerKBSat is required", 1); }
+
+        if (isset($args['token']) AND strlen($args['token'])) {
+            $args['token'] = strtoupper($args['token']);
+        } else {
+            $args['token'] = 'BTC';
+        }
+
+        $args['divisible'] = (isset($args['divisible']) ? !!$args['divisible'] : true);
+        $args['amountSat'] = intval($args['amountSat']);
+        $args['amountFloat'] = $args['divisible'] ? ($args['amountSat'] / self::SATOSHI) : $args['amountSat'];
+
+        if ($this->isBTCSend($args)) {
+            // simple one-time send
+            return $this->sendTransactionProposal($wallet, $args);
+        }
+
+        // send a dry run to get the input txid
+        $transaction_proposal = $this->sendTransactionProposal($wallet, $args, true);
+
+        // now compose the actual script with the first input txid
+        return $this->sendTransactionProposal($wallet, $args, false, $transaction_proposal['inputs'][0]['txid']);
+    }
+
+
+    public function getTransactionProposal(CopayWallet $wallet, $tx_proposal_id) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+
+        $result = $this->get('/v1/txproposals/'.$tx_proposal_id, [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
         return $result;
     }
 
-    /*
-    * returns:
-    * {
-    *   "address": "39VbaiHFKTzwCvjFJczdjVQX11cVgu29g1",
-    *   "walletId": "72abff08-6414-4d91-adfc-509cbc26e53f"
-    * }
-    */
-    public function getAddressInfo($copayer_id, $request_private_key) {
-        $result = $this->post('/v3/addresses/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+    public function publishTransactionProposal(CopayWallet $wallet, $transaction_proposal) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+
+        // build the transaction from the proposal
+        $tx_builder = new CopayTransactionBuilder();
+        $transaction = $tx_builder->buildTransactionFromProposal($transaction_proposal);
+
+        $copay_args = [];
+        // sign the transaction hex
+        $copay_args['proposalSignature'] = $this->signMessage($transaction->getHex(), $request_private_key);
+        // return null;
+
+        // publish the proposal
+        $tx_proposal_id = $transaction_proposal['id'];
+        $result = $this->post('/v1/txproposals/'.$tx_proposal_id.'/publish/', $copay_args, ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
         return $result;
     }
 
+    public function signTransactionProposal(CopayWallet $wallet, $transaction_proposal) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+        $address_hd_priv_key = $wallet['address_priv_hd_key'];
 
+        // build the transaction from the proposal
+        $tx_builder = new CopayTransactionBuilder();
+        $signatures = $tx_builder->buildTransactionSignaturesFromProposal($address_hd_priv_key, $transaction_proposal);
+
+        $copay_args = [
+            'signatures' => $signatures,
+        ];
+
+        // sign the transaction
+        $tx_proposal_id = $transaction_proposal['id'];
+        $result = $this->post('/v1/txproposals/'.$tx_proposal_id.'/signatures/', $copay_args, ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
+    // only for published transactions
+    public function deleteTransactionProposal(CopayWallet $wallet, $tx_proposal_id) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+
+        $result = $this->delete('/v1/txproposals/'.$tx_proposal_id, [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
+    // ------------------------------------------------------------------------
 
     public function get($url, $parameters=[], $options=[]) {
         return $this->call('GET',    $url, $parameters, $options);
@@ -115,17 +286,50 @@ class CopayClient
 
     // ------------------------------------------------------------------------
 
-    protected function signMessage($message, $wallet_priv_key) {
+    protected function requireSharedEncryptionService() {
+        if (!isset($this->shared_encryption_service)) { throw new Exception("Shared encryption service is required", 1); }
+        return $this->shared_encryption_service;
+    }
+
+    protected function requirePersonalEncryptionService() {
+        if (!isset($this->personal_encryption_service)) { throw new Exception("Personal encryption service is required", 1); }
+        return $this->personal_encryption_service;
+    }
+
+    protected function computeTransactionProposalSignature($copay_args, $request_private_key) {
+        // build a limited subset of outputs for signing
+        $outputs_for_signing = [];
+        foreach ($copay_args['outputs'] as $txp_output) {
+            $output = [];
+            $output['amount'] = $txp_output['amount'];
+            $output['message'] = isset($txp_output['message']) ? $txp_output['message'] : null;
+            $output['toAddress'] = isset($txp_output['toAddress']) ? $txp_output['toAddress'] : null;
+            $output['script'] = isset($txp_output['script']) ? $txp_output['script'] : null;
+            $outputs_for_signing[] = $output;
+        }
+
+        $proposal_header = [
+            'message'   => $copay_args['message'],
+            'outputs'   => $outputs_for_signing,
+            'payProUrl' => null,
+        ];
+
+        $string_to_sign = json_encode($proposal_header, JSON_UNESCAPED_SLASHES);
+        // echo "\$string_to_sign: ".($string_to_sign)."\n";
+        return $this->signMessage($string_to_sign, $request_private_key);
+    }
+
+    protected function signMessage($message, $priv_key) {
         // hash
         $hash = Hash::sha256d(new Buffer($message));
 
         $ec = Bitcoin::getEcAdapter();
         $signature = $ec->sign(
                 $hash,
-                $wallet_priv_key,
+                $priv_key,
                 new Rfc6979(
                     $ec,
-                    $wallet_priv_key,
+                    $priv_key,
                     $hash,
                     'sha256'
                 )
@@ -134,13 +338,141 @@ class CopayClient
         return $signature->getBuffer()->getHex();
     }
 
-    protected function signRequest($method, $url, $parameters, $wallet_priv_key) {
+    protected function signRequest($method, $url, $parameters, $priv_key) {
         // req.method.toLowerCase() + '|' + req.url + '|' + JSON.stringify(req.body)
         $api_path = parse_url($url)['path'];
         if (substr($api_path, 0, 8) == '/bws/api') { $api_path = substr($api_path, 8); }
 
-        $message = strtolower($method).'|'.$api_path.'|'.json_encode($parameters, JSON_UNESCAPED_SLASHES | JSON_FORCE_OBJECT);
-        return $this->signMessage($message, $wallet_priv_key);
+        $parameters_to_sign_string = '{}';
+        if ($parameters) {
+            $parameters_to_sign_string = json_encode($parameters, JSON_UNESCAPED_SLASHES);
+        }
+        $message = strtolower($method).'|'.$api_path.'|'.$parameters_to_sign_string;
+        // echo "Signing Request:\n{$message}\n";
+        return $this->signMessage($message, $priv_key);
+    }
+
+
+    // ------------------------------------------------------------------------
+
+    protected function sendTransactionProposal(CopayWallet $wallet, $args, $as_dry_run=false, $input_0_txid=null) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+
+        $copay_args = [
+            'toAddress' => $args['address'],
+            'amount'    => $args['amountSat'],
+            'feePerKB'  => $args['feePerKBSat'],
+        ];
+
+        if ($as_dry_run) { $copay_args['dryRun'] = true; }
+
+        // build the token or BTC outputs
+        $encrypted_message = null;
+        if (isset($args['message'])) {
+            $encrypted_message = $this->requireSharedEncryptionService()->encrypt($args['message']);
+        }
+        $outputs = $this->buildTransactionOutputsFromArgs($args, $encrypted_message, $input_0_txid);
+
+        // modify the args depending on the send type
+        if ($this->isTokenSend($args)) {
+            $copay_args = $this->modifyCopayArgsForTokenSend($copay_args, $args);
+        } else {
+            $copay_args = $this->modifyCopayArgsForBTCSend($copay_args, $args);
+        }
+
+        $copay_args['message'] = $encrypted_message;
+        $copay_args['outputs'] = $outputs;
+
+        $copay_args['proposalSignature'] = $this->computeTransactionProposalSignature($copay_args, $request_private_key);
+
+
+        // send the transaction proposal
+        $result = $this->post('/v2/txproposals/', $copay_args, ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+    
+    // ------------------------------------------------------------------------
+    
+    protected function isBTCSend($args) {
+        return ($args['token'] == 'BTC');
+    }
+
+    protected function isTokenSend($args) {
+        return !$this->isBTCSend($args);
+    }
+
+    protected function modifyCopayArgsForBTCSend($copay_args, $args) {
+        $copay_args['customData'] = ['isCounterparty' => false, 'counterparty' => null];
+        return $copay_args;
+    }
+
+    protected function modifyCopayArgsForTokenSend($copay_args, $args) {
+        // token sends aren't validated by the server
+        $copay_args['validateOutputs']  = false;
+        //outputs must remain in the given order for token sends
+        $copay_args['noShuffleOutputs'] = true;
+
+        // txp.customData = {isCounterparty: txp.isCounterparty, counterparty: txp.counterparty};  
+        $quantity_float = $args['amountFloat'];
+        $copay_args['customData'] = [
+            'isCounterparty' => true,
+            'counterparty'   => [
+                'token'         => $args['token'],
+                'quantity'      => $args['amountSat'],
+                'quantityFloat' => $quantity_float,
+                'amountStr'     => $quantity_float." ".$args['token'],
+                'divisible'     => $args['divisible'],
+            ],
+        ];
+
+        return $copay_args;
+    }
+
+    protected function buildTransactionOutputsFromArgs($args, $encrypted_message=null, $input_0_txid=null) {
+        $outputs = [];
+        if ($this->isBTCSend($args)) {
+            $output = [
+                'toAddress' => $args['address'],
+                'amount'    => $args['amountSat'],
+            ];
+            if ($encrypted_message !== null) {
+                $output['message'] = $encrypted_message;
+            }
+            $outputs[] = $output;
+        } else {
+            // build the token send scripts
+
+            // build the dust send
+            $output = [
+                'toAddress' => $args['address'],
+                'amount'    => self::CP_DUST_SIZE,
+            ];
+            if ($encrypted_message !== null) {
+                $output['message'] = $encrypted_message;
+            }
+            $outputs[] = $output;
+
+            // build the token OP_RETURN
+            if ($input_0_txid === null) {
+                // this is a placeholder for determining the fee
+                $op_return = self::OP_RETURN_PLACEHOLDER;
+            } else {
+                // build the OP_RETURN script
+                $op_return_builder = new OpReturnBuilder();
+                $quantity_obj = $args['divisible'] ? CryptoQuantity::fromSatoshis($args['amountSat']) : CryptoQuantity::fromIndivisibleAmount($args['amountSat']);
+                $op_return = $op_return_builder->buildOpReturn($quantity_obj, $args['token'], $input_0_txid);
+                $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return, 28))->getScript();
+                $op_return = $script->getBuffer()->getHex();
+            }
+            $output = [
+                'amount'    => 0,
+                'script'    => $op_return,
+            ];
+            $outputs[] = $output;
+
+        }
+        return $outputs;
     }
 
     // ------------------------------------------------------------------------
@@ -210,9 +542,9 @@ class CopayClient
         return [$headers, $request_params];
     }
 
-    protected function buildAuthentication($copayer_id, $wallet_priv_key, $method, $url, $parameters, $headers=[]) {
+    protected function buildAuthentication($copayer_id, $priv_key, $method, $url, $parameters, $headers=[]) {
         $headers['x-identity'] = $copayer_id;
-        $headers['x-signature'] = $this->signRequest($method, $url, $parameters, $wallet_priv_key);
+        $headers['x-signature'] = $this->signRequest($method, $url, $parameters, $priv_key);
 
         return $headers;
     }
@@ -234,7 +566,7 @@ class CopayClient
         $copay_status_code = null;
         $error_message = null;
         $error_code = 1;
-        if ($json) {
+        if ($is_bad_status_code AND $json) {
             // check for error
             if (isset($json['code'])) {
                 $copay_status_code = $json['code'];
