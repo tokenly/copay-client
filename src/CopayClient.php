@@ -70,12 +70,13 @@ class CopayClient
      *   address: destination bitcoin address
      *   amountSat: The amount to send in Satoshis (for indivisible assets, this is the amount of tokens to send)
      *   feePerKB: fee per KB
+     *   dustSize: counterparty dust size in satoshis (optional - default: 5430)
      *   token: the token to send (optional - default: BTC)
      *   divisible: set to false for indivisible tokens (optional - default: true)
      *   message: the transaction message (optional)
      * 
      * @param  CopayWallet $wallet       The seeded wallet
-     * @param  array       $args         arguments: address, amountSat, feePerKB, [token=BTC], message
+     * @param  array       $args         arguments: address, amountSat, feePerKB, [dustSize], [token=BTC], [message]
      * @return array                     The transaction info
      */
     public function proposePublishAndSignTransaction(CopayWallet $wallet, $args) {
@@ -446,7 +447,7 @@ class CopayClient
             // build the dust send
             $output = [
                 'toAddress' => $args['address'],
-                'amount'    => self::CP_DUST_SIZE,
+                'amount'    => (isset($args['dustSize']) ? isset($args['dustSize']) : self::CP_DUST_SIZE),
             ];
             if ($encrypted_message !== null) {
                 $output['message'] = $encrypted_message;
