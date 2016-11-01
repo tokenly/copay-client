@@ -363,7 +363,7 @@ class CopayClient
         $copay_args = [
             'toAddress' => $args['address'],
             'amount'    => $args['amountSat'],
-            'feePerKB'  => $args['feePerKBSat'],
+            'feePerKb'  => $args['feePerKBSat'],
         ];
 
         if ($as_dry_run) { $copay_args['dryRun'] = true; }
