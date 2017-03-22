@@ -25,10 +25,8 @@ use Tokenly\CryptoQuantity\CryptoQuantity;
 class CopayClient
 {
 
-    // a trial OP_RETURN for calculating fees
-    const SATOSHI               = 100000000;
-    const CP_DUST_SIZE          = 5430;
-    const OP_RETURN_PLACEHOLDER = '6a3800000000000000000000000000000000000000000000000000000000';
+    const SATOSHI      = 100000000;
+    const CP_DUST_SIZE = 5430;
 
     protected $api_base_url = '';
 
@@ -67,8 +65,10 @@ class CopayClient
      * Publishes and signs a transaction
      * 
      * args are:
-     *   address: destination bitcoin address
-     *   amountSat: The amount to send in Satoshis (for indivisible assets, this is the amount of tokens to send)
+     *   counterpartyType: send or issuance (optional - default: send)
+     *   address: destination bitcoin address (for sends only)
+     *   amountSat: The amount to send or issue in Satoshis (for indivisible assets, this is the amount of tokens to send or issue)
+     *   description: for issuance, the issuance description
      *   feePerKB: fee per KB
      *   dustSize: counterparty dust size in satoshis (optional - default: 5430)
      *   token: the token to send (optional - default: BTC)
@@ -180,7 +180,13 @@ class CopayClient
 
 
     public function proposeTransaction(CopayWallet $wallet, $args) {
-        if (!isset($args['address']) OR !$args['address']) { throw new Exception("address is required", 1); }
+        $transaction_type = $this->counterpartyTypeFromArgs($args);
+
+        if ($transaction_type == 'send') {
+            if (!isset($args['address']) OR !$args['address']) { throw new Exception("address is required", 1); }
+        } else if ($transaction_type == 'send') {
+            if (!isset($args['description']) OR !$args['description']) { throw new Exception("description is required", 1); }
+        }
         if (!isset($args['amountSat']) OR !$args['amountSat']) { throw new Exception("amountSat is required", 1); }
         if (!isset($args['feePerKBSat']) OR !$args['feePerKBSat']) { throw new Exception("feePerKBSat is required", 1); }
 
@@ -361,10 +367,12 @@ class CopayClient
         $request_private_key = $wallet['requestPrivKey'];
 
         $copay_args = [
-            'toAddress' => $args['address'],
             'amount'    => $args['amountSat'],
             'feePerKb'  => $args['feePerKBSat'],
         ];
+        if (isset($args['address'])) {
+            $copay_args['toAddress'] = $args['address'];
+        }
 
         if ($as_dry_run) { $copay_args['dryRun'] = true; }
 
@@ -376,8 +384,8 @@ class CopayClient
         $outputs = $this->buildTransactionOutputsFromArgs($args, $encrypted_message, $input_0_txid);
 
         // modify the args depending on the send type
-        if ($this->isTokenSend($args)) {
-            $copay_args = $this->modifyCopayArgsForTokenSend($copay_args, $args);
+        if ($this->isTokenTransaction($args)) {
+            $copay_args = $this->modifyCopayArgsForTokenTransaction($copay_args, $args);
         } else {
             $copay_args = $this->modifyCopayArgsForBTCSend($copay_args, $args);
         }
@@ -399,7 +407,7 @@ class CopayClient
         return ($args['token'] == 'BTC');
     }
 
-    protected function isTokenSend($args) {
+    protected function isTokenTransaction($args) {
         return !$this->isBTCSend($args);
     }
 
@@ -408,7 +416,7 @@ class CopayClient
         return $copay_args;
     }
 
-    protected function modifyCopayArgsForTokenSend($copay_args, $args) {
+    protected function modifyCopayArgsForTokenTransaction($copay_args, $args) {
         // token sends aren't validated by the server
         $copay_args['validateOutputs']  = false;
         //outputs must remain in the given order for token sends
@@ -416,14 +424,17 @@ class CopayClient
 
         // txp.customData = {isCounterparty: txp.isCounterparty, counterparty: txp.counterparty};  
         $quantity_float = $args['amountFloat'];
+        $transaction_type = $this->counterpartyTypeFromArgs($args);
         $copay_args['customData'] = [
             'isCounterparty' => true,
+            'counterpartyType' => $transaction_type,
             'counterparty'   => [
                 'token'         => $args['token'],
                 'quantity'      => $args['amountSat'],
                 'quantityFloat' => $quantity_float,
                 'amountStr'     => $quantity_float." ".$args['token'],
                 'divisible'     => $args['divisible'],
+                'type'          => $transaction_type,
             ],
         ];
 
@@ -442,30 +453,39 @@ class CopayClient
             }
             $outputs[] = $output;
         } else {
-            // build the token send scripts
+            // build the token send or issuance scripts
 
-            // build the dust send
-            $output = [
-                'toAddress' => $args['address'],
-                'amount'    => (isset($args['dustSize']) ? isset($args['dustSize']) : self::CP_DUST_SIZE),
-            ];
-            if ($encrypted_message !== null) {
-                $output['message'] = $encrypted_message;
-            }
-            $outputs[] = $output;
+            // send or issuance
+            $transaction_type = $this->counterpartyTypeFromArgs($args);
 
-            // build the token OP_RETURN
-            if ($input_0_txid === null) {
-                // this is a placeholder for determining the fee
-                $op_return = self::OP_RETURN_PLACEHOLDER;
-            } else {
-                // build the OP_RETURN script
-                $op_return_builder = new OpReturnBuilder();
-                $quantity_obj = $args['divisible'] ? CryptoQuantity::fromSatoshis($args['amountSat']) : CryptoQuantity::fromIndivisibleAmount($args['amountSat']);
-                $op_return = $op_return_builder->buildOpReturn($quantity_obj, $args['token'], $input_0_txid);
-                $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return, 28))->getScript();
-                $op_return = $script->getBuffer()->getHex();
+
+            if ($transaction_type == 'send') {
+                // build the dust send (for sends only)
+                $output = [
+                    'toAddress' => $args['address'],
+                    'amount'    => (isset($args['dustSize']) ? isset($args['dustSize']) : self::CP_DUST_SIZE),
+                ];
+                if ($encrypted_message !== null) {
+                    $output['message'] = $encrypted_message;
+                }
+                $outputs[] = $output;
             }
+
+            $op_return_builder = new OpReturnBuilder();
+            $quantity_obj = $args['divisible'] ? CryptoQuantity::fromSatoshis($args['amountSat']) : CryptoQuantity::fromIndivisibleAmount($args['amountSat']);
+
+            // build the OP_RETURN script
+            switch ($transaction_type) {
+                case 'send':
+                    $op_return = $op_return_builder->buildOpReturnForSend($quantity_obj, $args['token'], $input_0_txid);
+                    break;
+                case 'issuance':
+                    $op_return = $op_return_builder->buildOpReturnForIssuance($quantity_obj, $args['token'], $args['divisible'], $args['description'], $input_0_txid);
+                    break;
+            }
+            $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return))->getScript();
+            $op_return = $script->getBuffer()->getHex();
+
             $output = [
                 'amount'    => 0,
                 'script'    => $op_return,
@@ -474,6 +494,13 @@ class CopayClient
 
         }
         return $outputs;
+    }
+
+    protected function counterpartyTypeFromArgs($args) {
+        if (isset($args['counterpartyType']) AND $args['counterpartyType'] == 'issuance') {
+            return 'issuance';
+        }
+        return 'send';
     }
 
     // ------------------------------------------------------------------------

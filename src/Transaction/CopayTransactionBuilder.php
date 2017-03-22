@@ -24,6 +24,7 @@ class CopayTransactionBuilder
 
     public function buildTransactionFromProposal($transaction_proposal, $with_op_0=true) {
         $is_token_transaction = !!$transaction_proposal['customData']['isCounterparty'];
+        $transaction_type = $is_token_transaction ? ($transaction_proposal['customData']['counterpartyType']) : null;
 
         $tx_builder = TransactionFactory::build();
 
@@ -103,22 +104,13 @@ class CopayTransactionBuilder
                 // non-change output
                 $output = $transaction_proposal['outputs'][$output_offset];
                 
-                if ($is_token_transaction AND $output_offset === 1) {
+                if ($is_token_transaction AND $output_offset === ($change_offset - 1)) {
                     // build the OP_RETURN output
-                    $counterparty_data = $transaction_proposal['customData']['counterparty'];
-
-                    // build the OP_RETURN script
-                    $op_return_builder = new OpReturnBuilder();
-                    $quantity_obj = CryptoQuantity::fromFloat($counterparty_data['quantityFloat'], $counterparty_data['divisible']);
-                    $op_return = $op_return_builder->buildOpReturn($quantity_obj, $counterparty_data['token'], $transaction_proposal['inputs'][0]['txid']);
-                    $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return, 28))->getScript();
-                    $tx_builder->output(0, $script);
-
+                    $tx_builder->output(0, ScriptFactory::fromHex($output['script']));
                 } else {
                     // regular BTC send - handles 1xxx and 3xxx addresses
                     $tx_builder->payToAddress($output['amount'], AddressFactory::fromString($output['toAddress']));
                 }
-
             }
         }
 
