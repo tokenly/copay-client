@@ -188,7 +188,11 @@ class CopayClient
             if (!isset($args['description']) OR !$args['description']) { throw new Exception("description is required", 1); }
         }
         if (!isset($args['amountSat']) OR !$args['amountSat']) { throw new Exception("amountSat is required", 1); }
-        if (!isset($args['feePerKBSat']) OR !$args['feePerKBSat']) { throw new Exception("feePerKBSat is required", 1); }
+        if (!isset($args['feePerKBSat']) OR !$args['feePerKBSat']) {
+            if (!isset($args['feeSat']) OR !$args['feeSat']) {
+                throw new Exception("feePerKBSat or feeSat is required", 1);
+            }
+        }
 
         if (isset($args['token']) AND strlen($args['token'])) {
             $args['token'] = strtoupper($args['token']);
@@ -368,8 +372,13 @@ class CopayClient
 
         $copay_args = [
             'amount'    => $args['amountSat'],
-            'feePerKb'  => $args['feePerKBSat'],
         ];
+
+        if (isset($args['feePerKBSat'])) {
+            $copay_args['feePerKb'] = $args['feePerKBSat'];
+        } else if (isset($args['feeSat'])) {
+            $copay_args['fee'] = $args['feeSat'];
+        }
         if (isset($args['address'])) {
             $copay_args['toAddress'] = $args['address'];
         }
