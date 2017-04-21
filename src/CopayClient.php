@@ -131,6 +131,35 @@ class CopayClient
     }
 
 
+    /**
+     * Fetch UTXOs
+     * @param  CopayWallet $wallet The seeded wallet
+     * @return array               List of UTXOs
+     * [
+     *     {
+     *         "txid": "ad501692ab08cf637696ce886946849455a7fb452fb0712f7488b031f5aca3a2",
+     *         "vout": 0,
+     *         "address": "3NHozEeYbtoy9HDTW7F2t8HvzoSyrqodWc",
+     *         "scriptPubKey": "a914e1f71c422899ef7efe627dea65de08f0d00a106087",
+     *         "satoshis": 500000,
+     *         "confirmations": 4367,
+     *         "locked": false,
+     *         "path": "m/0/0",
+     *         "publicKeys": [
+     *             "030279ef7cbe72238065c2aa28b77ab8b90a7195b930c1b39f5c482958620d201f",
+     *             "0236d40074887286c6bf1843702c77b47dc1fcc92e99532b2cccb58355c6df4de7"
+     *         ]
+     *     }
+     * ]
+     */
+    public function getUtxos(CopayWallet $wallet) {
+        $copayer_id          = $wallet['copayerId'];
+        $request_private_key = $wallet['requestPrivKey'];
+        $result = $this->get('/v1/utxos/', [], ['copayer_id' => $copayer_id, 'private_key' => $request_private_key]);
+        return $result;
+    }
+
+
 
     // returns the wallet id
     public function createWallet(CopayWallet $wallet, $wallet_name, $args) {
