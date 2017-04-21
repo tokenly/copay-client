@@ -221,6 +221,9 @@ class CopayClient
             if (!isset($args['feeSat']) OR !$args['feeSat']) {
                 throw new Exception("feePerKBSat or feeSat is required", 1);
             }
+            if (isset($args['feeSat']) AND (!isset($args['inputs']) OR !$args['inputs'])) {
+                throw new Exception("inputs are required with feeSat", 1);
+            }
         }
 
         if (isset($args['token']) AND strlen($args['token'])) {
@@ -407,6 +410,7 @@ class CopayClient
             $copay_args['feePerKb'] = $args['feePerKBSat'];
         } else if (isset($args['feeSat'])) {
             $copay_args['fee'] = $args['feeSat'];
+            $copay_args['inputs'] = $args['inputs'];
         }
         if (isset($args['address'])) {
             $copay_args['toAddress'] = $args['address'];
