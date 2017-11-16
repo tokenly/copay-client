@@ -13,8 +13,6 @@ use BitWasp\Bitcoin\Transaction\TransactionFactory;
 use BitWasp\Bitcoin\Transaction\TransactionOutput;
 use BitWasp\Buffertools\Buffer;
 use Exception;
-use Tokenly\CounterpartyTransactionComposer\OpReturnBuilder;
-use Tokenly\CryptoQuantity\CryptoQuantity;
 
 /*
 * CopayTransactionBuilder

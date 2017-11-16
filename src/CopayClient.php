@@ -13,8 +13,6 @@ use Tokenly\CopayClient\CopayException;
 use Tokenly\CopayClient\CopayWallet;
 use Tokenly\CopayClient\EncryptionService\EncryptionServiceClient;
 use Tokenly\CopayClient\Transaction\CopayTransactionBuilder;
-use Tokenly\CounterpartyTransactionComposer\OpReturnBuilder;
-use Tokenly\CryptoQuantity\CryptoQuantity;
 
 /*
 * CopayClient
@@ -65,12 +63,12 @@ class CopayClient
      * Publishes and signs a transaction
      * 
      * args are:
-     *   counterpartyType: send or issuance (optional - default: send)
+     *   counterpartyData: send or issuance (optional - default: send)
+     *   opReturnData: The hex encoded OP_RETURN data for counterparty sends (optional)
      *   address: destination bitcoin address (for sends only)
      *   amountSat: The amount to send or issue in Satoshis (for indivisible assets, this is the amount of tokens to send or issue)
      *   description: for issuance, the issuance description
      *   feePerKB: fee per KB
-     *   dustSize: counterparty dust size in satoshis (optional - default: 5430)
      *   token: the token to send (optional - default: BTC)
      *   divisible: set to false for indivisible tokens (optional - default: true)
      *   message: the transaction message (optional)
@@ -461,7 +459,7 @@ class CopayClient
     protected function modifyCopayArgsForTokenTransaction($copay_args, $args) {
         // token sends aren't validated by the server
         $copay_args['validateOutputs']  = false;
-        //outputs must remain in the given order for token sends
+        // outputs must remain in the given order for token sends
         $copay_args['noShuffleOutputs'] = true;
 
         // txp.customData = {isCounterparty: txp.isCounterparty, counterparty: txp.counterparty};  
@@ -500,38 +498,21 @@ class CopayClient
             // send or issuance
             $transaction_type = $this->counterpartyTypeFromArgs($args);
 
-
-            if ($transaction_type == 'send') {
-                // build the dust send (for sends only)
-                $output = [
-                    'toAddress' => $args['address'],
-                    'amount'    => (isset($args['dustSize']) ? isset($args['dustSize']) : self::CP_DUST_SIZE),
-                ];
-                if ($encrypted_message !== null) {
-                    $output['message'] = $encrypted_message;
-                }
-                $outputs[] = $output;
-            }
-
-            $op_return_builder = new OpReturnBuilder();
-            $quantity_obj = $args['divisible'] ? CryptoQuantity::fromSatoshis($args['amountSat']) : CryptoQuantity::fromIndivisibleAmount($args['amountSat']);
-
             // build the OP_RETURN script
-            switch ($transaction_type) {
-                case 'send':
-                    $op_return = $op_return_builder->buildOpReturnForSend($quantity_obj, $args['token'], $input_0_txid);
-                    break;
-                case 'issuance':
-                    $op_return = $op_return_builder->buildOpReturnForIssuance($quantity_obj, $args['token'], $args['divisible'], $args['description'], $input_0_txid);
-                    break;
-            }
-            $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return))->getScript();
+            $op_return_hex_string = $args['counterpartyData'];
+            $script = ScriptFactory::create()->op('OP_RETURN')->push(Buffer::hex($op_return_hex_string))->getScript();
             $op_return = $script->getBuffer()->getHex();
 
             $output = [
                 'amount'    => 0,
                 'script'    => $op_return,
             ];
+
+            // try the encrypted message with the OP_RETURN output
+            if ($encrypted_message !== null) {
+                $output['message'] = $encrypted_message;
+            }
+
             $outputs[] = $output;
 
         }

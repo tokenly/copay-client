@@ -23,23 +23,14 @@ use Exception;
 class CopayWallet implements ArrayAccess
 {
 
-    const PUBLIC_KEY  = 1;
-    const PRIVATE_KEY = 2;
-
     protected $credentials = [];
 
     protected $root_entropy_key        = null; // the master HD key that builds all other keys
     protected $master_priv_hd_key_seed = null; // the seed for the master hd key
 
-    public static function newWalletFromPlatformSeedAndWalletSeed($platform_seed, $wallet_seed) {
+    public static function newWalletFromEntropyHex($entropy_hex) {
         $wallet = new CopayWallet();
-        $wallet->initEntropyFromSeeds($platform_seed, $wallet_seed);
-        return $wallet;
-    }
-
-    public static function newFromMnemonic($mnemonic, $platform_seed, $wallet_seed) {
-        $wallet = new CopayWallet();
-        $wallet->initEntropyFromMnemonic($mnemonic, $platform_seed, $wallet_seed);
+        $wallet->initFromEntropy($entropy_hex);
         return $wallet;
     }
 
@@ -102,23 +93,14 @@ class CopayWallet implements ArrayAccess
     protected function __construct() {
     }
 
-    protected function initRootEntropyKeyFromSeeds($platform_seed, $wallet_seed) {
-        $this->root_entropy_key = HierarchicalKeyFactory::fromEntropy(new Buffer($platform_seed.$wallet_seed));
-    }
-    
-    protected function initEntropyFromSeeds($platform_seed, $wallet_seed) {
-        $this->initRootEntropyKeyFromSeeds($platform_seed, $wallet_seed);
+    protected function initFromEntropy($entropy_hex) {
+        $this->root_entropy_key = HierarchicalKeyFactory::fromEntropy(Buffer::hex($entropy_hex));
 
         // build a mnemonic seed from the root entropy key
         $bip39 = MnemonicFactory::bip39();
         $mnemonic = $bip39->entropyToMnemonic($this->root_entropy_key->derivePath("m/1'/0")->getPrivateKey()->getBuffer());
 
         $this->initMasterPrivateHDKeySeedFromMnemonic($mnemonic);
-    }
-
-    protected function initEntropyFromMnemonic($mnemonic, $platform_seed, $wallet_seed, $password='') {
-        $this->initRootEntropyKeyFromSeeds($platform_seed, $wallet_seed);
-        $this->initMasterPrivateHDKeySeedFromMnemonic($mnemonic, $password);
     }
 
     protected function initMasterPrivateHDKeySeedFromMnemonic($mnemonic, $password='') {

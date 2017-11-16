@@ -13,8 +13,6 @@
     "require": {
         "php": ">=5.6.0",
         "bitwasp/bitcoin": "^0.0.30",
-        "tokenly/counterparty-transaction-composer": "^1.1.2|dev-master",
-        "tokenly/crypto-quantity": "^1.0",
         "rmccue/requests": "^1.6.1|dev-master"
     },
     "require-dev": {
@@ -22,5 +20,12 @@
     },
     "autoload": {
         "psr-4": {"Tokenly\\CopayClient\\": "src/"}
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Tokenly\\CopayClient\\Provider\\CopayClientServiceProvider"
+            ]
+        }
     }
 }
